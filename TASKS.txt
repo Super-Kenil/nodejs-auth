@@ -1,0 +1,4 @@
+Register
+Login
+Login with multiple sessions
+Logout
