@@ -1,5 +1,9 @@
 // main
 import { Joi } from "express-validation";
+import bcrypt from "bcrypt";
+import { Sequelize } from "sequelize";
+import _ from "lodash";
+
 
 
 // Models
@@ -10,6 +14,8 @@ import Sessions from "../models/sessions.model.js"
 import { GenerateAToken } from "../helpers/tokenGenerator.js";
 
 // variables
+const Op = Sequelize.Op
+
 
 export const userController = {
   registerUser,
@@ -21,7 +27,13 @@ async function registerUser(req, res) {
     const validateSchema = Joi.object().keys({
       email: Joi.string().email().required(),
       name: Joi.string().required(),
-      password: Joi.string().required(),
+      password: Joi.string()
+        .regex(/^(?=.*[a-z])(?=.*[A-Z])(?=.*[0-9])(?=.*[!@#\$%\^&\*])(?=.{8,})/)
+        .required()
+        .messages({
+          "string.pattern.base":
+            "Password must contain at least 8 characters, one uppercase, one lowercase, one number and one special case character.",
+        }),
       device_info: Joi.string().required(),
     });
 
@@ -33,42 +45,63 @@ async function registerUser(req, res) {
       });
     }
 
-    const user = await Users.create({
-      email: req.body.email,
-      name: req.body.name,
-      password: req.body.password,
-    })
-
-    if (!user) {
+    const user = await Users.findOne({ where: { email: req.body.email } });
+    if (user) {
       return res.status(400).json({
         status: false,
-        message: 'Error creating user',
-      })
+        message: "User already exists.",
+      });
     }
 
-    const date = new Date();
-    date.setDate(date.getDate() + 30)
+    bcrypt.hash(req.body.password, 10, async (err, hash) => {
+      if (err) {
+        return res.status(500).json({
+          status: false,
+          message: err.message
+        });
+      };
 
-    const session = await Sessions.create({
-      user_id: user.id,
-      device_info: req.body.device_info,
-      token: await GenerateAToken(),
-      expires_at: date,
-      last_access_at: new Date(),
+      req.body.pasword = hash;
+      const userCreateResult = await Users.create({
+        email: req.body.email,
+        name: req.body.name,
+        password: req.body.password,
+      })
+
+      if (!userCreateResult) {
+        return res.status(400).json({
+          status: false,
+          message: 'Error creating user',
+        })
+      }
+
+      const date = new Date();
+      date.setDate(date.getDate() + 30)
+
+      const session = await Sessions.create({
+        user_id: userCreateResult.id,
+        device_info: req.body.device_info,
+        token: await GenerateAToken(),
+        expires_at: date,
+        last_access_at: new Date(),
+      })
+
+      if (!session) {
+        return res.status(400).json({
+          status: false,
+          message: 'Error Generating token',
+        })
+      }
+
+      const userResponse = _.omit(userCreateResult.dataValues, ['password', 'created_at', 'updated_at'])
+      const sessionResponse = _.omit(session.dataValues, ['created_at', 'last_access_at', 'updated_at',])
+
+      return res.status(200).json({
+        status: true,
+        message: "User Registered Successfully!",
+        data: { userResponse, sessionResponse },
+      });
     })
-
-    if (!session) {
-      return res.status(400).json({
-        status: false,
-        message: 'Error Generating token',
-      })
-    }
-
-    return res.status(200).json({
-      status: true,
-      message: "User Registered Successfully!",
-      data: { user, session },
-    });
 
   } catch (err) {
     return res.status(400).json({
